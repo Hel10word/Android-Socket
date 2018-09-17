@@ -1,0 +1,4 @@
+导入请 修改包名
+ Client_one与Server_one 是使用writeUTF()与readeUTF
+ two 是使用BufferedReader来读.....  准备通过线程来同时读写  没有完善好
+ three 使用Reader来读....
