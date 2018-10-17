@@ -8,8 +8,11 @@ import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -20,26 +23,32 @@ import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
+import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-public class MainActivity extends AppCompatActivity implements View.OnClickListener {
+public class MainActivity extends AppCompatActivity implements View.OnClickListener,AdapterView.OnItemSelectedListener {
     private Button Btn_sendMsg,Btn_startServer,Btn_closeServer;
     private TextView Tv_ipAddress,Tv_port,Tv_log;
     private EditText Et_input;
+    private Spinner Sp_clientList;
 
     private ProgressDialog progressDialog;
     private ServerSocket serverSocket;
-    private Socket clientSocket;
-    private InputStreamReader reader;
-    private OutputStreamWriter writer;
     private static String Ip;
     private static Integer Port;
+    private static Integer ClientNum = 0;
 
+    Map<String,OutputStreamWriter> SocketInfoMap = new HashMap<>();
+    List<String> SocketList = new ArrayList<>();
+    boolean readerTheadIsAlive = false;
     private static final int SEND_TOAST = 0;
     private static final int UPDATE_IP_PORT = 1;
     private static final int UPDATE_LOG = 2;
     private static final int CLEAR = 3;
-    private static final int READ_THREAD = 4;
     Handler handler = new Handler(){
         @Override
         public void handleMessage(Message msg) {
@@ -58,13 +67,15 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                     break;
                 case CLEAR:
                     try{
-                        if(reader!=null)reader.close();
-                        reader = null;
-                        if(writer!=null)writer.close();
-                        writer = null;
-                        if(clientSocket!=null)clientSocket.close();
-                        clientSocket = null;
+                        readerTheadIsAlive = true;
                         if(serverSocket!=null)serverSocket.close();
+                        for(String key : SocketInfoMap.keySet()){
+                            SocketInfoMap.get(key).close();
+                        }
+                        SocketInfoMap.clear();
+                        SocketList.clear();
+                        SocketList.add("请选择要发送的客户端对象");
+                        handler.sendEmptyMessage(4);
                         serverSocket = null;
                     }catch (Exception e){
                         Log.i("hander CLEAR","关闭接口失败");
@@ -73,10 +84,9 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                     Et_input.setText("");
                     Tv_log.setText("");
                     break;
-                case READ_THREAD:
-                    myReaderThread.start();
+                case 4:
+                    Sp_clientList.setAdapter(new ArrayAdapter<String>(MainActivity.this,android.R.layout.simple_list_item_1,SocketList));
                     break;
-
             }
         }
     };
@@ -84,10 +94,13 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        SocketList.add("请选择要发送的客户端对象");
         init();
         progressDialog = new ProgressDialog(this);
         progressDialog.setMessage("正在载入....");
         progressDialog.show();
+        Sp_clientList.setAdapter(new ArrayAdapter<String>(MainActivity.this,android.R.layout.simple_list_item_1,SocketList));
+        Sp_clientList.setOnItemSelectedListener(this);
         //开启一个线程用开获取本地IP地址
         new Thread(new Runnable() {
             @Override
@@ -113,6 +126,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         Tv_port = findViewById(R.id.Tv_port);               //显示服务器端口号
         Tv_log = findViewById(R.id.Tv_log);                 //日志信息
         Et_input = findViewById(R.id.Et_input);             //输入框
+        Sp_clientList = findViewById(R.id.Sp_clientList);   //用来选择要发送的对象
     }
 
     /**
@@ -162,12 +176,15 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                             serverSocket = new ServerSocket(Port);
                             Log.i("serverSocket","服务器启动成功");
                             sendToast("服务器启动成功");
-                            clientSocket = serverSocket.accept();
-                            Log.i("clientSocket","已捕获客户端连接");
-                            Log.i("clientSocket","客户端连接状态:"+clientSocket.isConnected());
-                            reader = new InputStreamReader(clientSocket.getInputStream(),"UTF-8");
-                            writer = new OutputStreamWriter(clientSocket.getOutputStream(),"UTF-8");
-                            if(clientSocket.isConnected())handler.sendEmptyMessage(READ_THREAD);
+                            while (true){
+                                Socket you = serverSocket.accept();
+                                readerTheadIsAlive = false;
+                                ReaderThread(you);
+                                OutputStreamWriter writer = new OutputStreamWriter(you.getOutputStream(),"UTF-8");
+                                SocketInfoMap.put(you.getInetAddress().toString(),writer);
+                                SocketList.add(you.getInetAddress().toString());
+                                handler.sendEmptyMessage(4);
+                            }
                         }catch (Exception e){
                             Log.i("serverSocket","启动服务失败");
                         }
@@ -186,15 +203,23 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                         String input = null;
                         input = Et_input.getText().toString().trim();
                        try {
+                           if(ClientNum==0){
+                               sendToast("请确认客户端已连接 并选择正确的客户端IP");
+                               return;
+                           }
+                           OutputStreamWriter writer = SocketInfoMap.get(SocketList.get(ClientNum));
                            writer.write(input);
                            writer.flush();
-
                            Message sendMsg = new Message();
                            sendMsg.what = UPDATE_LOG;
-                           sendMsg.obj = "\n                                                   "+input;
+                           sendMsg.obj = "\n                                                   发送给"+SocketList.get(ClientNum)+"的消息："+input;
                            handler.sendMessage(sendMsg);
                            Log.i("mySocket","发送的消息为:"+input);
                        }catch (Exception e){
+                           sendToast("客户端："+SocketList.get(ClientNum)+"可能下线，请从新连接");
+                           SocketInfoMap.remove(SocketList.get(ClientNum));
+                           SocketList.remove(SocketList.get(ClientNum));
+                           handler.sendEmptyMessage(4);
                            Log.i("Btn_sendMsg","写入消息失败");
                        }
                     }
@@ -203,32 +228,54 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         }
     }
 
-   private Thread myReaderThread = new Thread(new Runnable() {
-        @Override
-        public void run() {
-            if(reader==null)return;
-            Log.i("myWriteRun","启动读取线程");
-            String readText = null;
-            char [] chars = new char[2048];
-            int len = 0;
-            try {
-                Log.i("myReaderThread","准备开始读取流中的信息");
-                while ((len = reader.read(chars)) != -1){
-                    readText = new String(chars,0,len);
-                    if (readText!=null){
-                        Log.i("myReaderThread","读取到的信息为"+readText);
-                        Message msg = new Message();
-                        msg.obj = "\n客户端:"+readText;
-                        msg.what = UPDATE_LOG;
-                        handler.sendMessage(msg);
+    public void ReaderThread(final Socket you){
+        if(you.isConnected()){
+            new Thread(){
+                @Override
+                public void run() {
+                    try{
+                        InputStreamReader reader = new InputStreamReader(you.getInputStream());
+                        String readText = null;
+                        char [] chars = new char[2048];
+                        int len = 0;
+                        try {
+                            while ((len = reader.read(chars)) != -1){
+                                if(readerTheadIsAlive)break;
+                                readText = new String(chars,0,len);
+                                if (readText!=null){
+                                    Log.i(you.getInetAddress().toString(),"读取到的信息为"+readText);
+                                    Message msg = new Message();
+                                    msg.obj = "\n客户端"+you.getInetAddress().toString()+":"+readText;
+                                    msg.what = UPDATE_LOG;
+                                    handler.sendMessage(msg);
+                                }
+                                readText = null;
+                            }
+                            reader.close();
+                            reader = null;
+                            return;
+                        }catch (Exception e){
+                            System.out.print(e.toString());
+                        }
+                    }catch (Exception e){
+                        sendToast("创建读取流失败！");
                     }
-                    readText = null;
                 }
-            }catch (Exception e){
-                System.out.print(e.toString());
-                Log.i("myReaderRun","读取出错");
-            }
+            }.start();
+        }else {
+            sendToast(you.getLocalAddress().toString()+"的读取服务启动失败！");
         }
-    });
+    }
 
+
+    @Override
+    public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+        ClientNum = position;
+        sendToast("您当前选择的用户为："+SocketList.get(position));
+    }
+
+    @Override
+    public void onNothingSelected(AdapterView<?> parent) {
+
+    }
 }

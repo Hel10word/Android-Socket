@@ -56,6 +56,12 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal">
 
+        <Spinner
+            android:id="@+id/Sp_clientList"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_weight="6" />
+
         <EditText
             android:id="@+id/Et_input"
             android:layout_width="wrap_content"
